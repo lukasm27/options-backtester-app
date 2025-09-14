@@ -8,19 +8,23 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-def run_backtest(ticker: str, min_exp: int, max_exp: int, target_delta: float, risk_free: float) -> dict:
-    #Runs a covered call backtest for a given ticker and strategy parameters.
+def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_delta: float, risk_free: float) -> dict:
+    """Runs a backtest for a given ticker and strategy."""
     TIME_PERIOD_YEARS = 0.25
+    # For puts, delta is negative, so use the absolute value for the target
+    TARGET_DELTA = abs(target_delta) if strategy == 'cash_secured_put' else target_delta
 
-    def calculate_delta(row, stock_price, days_expiry):
-        #Helper function to calculate option delta using Black-Scholes.
+    def calculate_greek(row, stock_price, days_expiry, greek='delta', flag='c'):
+        #Helper function to calculate option greeks using Black-Scholes.
         try:
             S = stock_price
             K = row['strike']
             t = days_expiry / 365.25
             r = risk_free
             sigma = row['impliedVolatility']
-            return greeks.delta('c', S, K, t, r, sigma)
+            if greek == 'delta':
+                return greeks.delta(flag, S, K, t, r, sigma)
+            # Can add other greeks like gamma or theta here later
         except Exception:
             return None
 
@@ -28,7 +32,6 @@ def run_backtest(ticker: str, min_exp: int, max_exp: int, target_delta: float, r
         ticker_obj = yf.Ticker(ticker)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=TIME_PERIOD_YEARS * 365)
-
         stock_history = ticker_obj.history(start=start_date, end=end_date, interval="1d")
         stock_history.index = stock_history.index.tz_localize(None)
         trade_days = stock_history.resample('MS').first().index
@@ -44,7 +47,6 @@ def run_backtest(ticker: str, min_exp: int, max_exp: int, target_delta: float, r
                 continue
 
             stock_price = stock_history.loc[trade_date]['Close']
-
             suitable_exp = None
             days_expiry = 0
             for exp_str in expirations:
@@ -58,21 +60,32 @@ def run_backtest(ticker: str, min_exp: int, max_exp: int, target_delta: float, r
             if not suitable_exp:
                 continue
 
-            calls = ticker_obj.option_chain(suitable_exp).calls
-            calls = calls.dropna(subset=['impliedVolatility', 'strike', 'bid'])
-            calls = calls[calls['impliedVolatility'] > 0]
-            calls = calls[calls['bid'] > 0]
+            # STRATEGY LOGIC
+            option_chain = ticker_obj.option_chain(suitable_exp)
+            if strategy == 'covered_call':
+                options_df = option_chain.calls
+                option_flag = 'c' #call
+                outcome_condition = lambda expiry_price, strike: expiry_price > strike
+            elif strategy == 'cash_secured_put':
+                options_df = option_chain.puts
+                option_flag = 'p' #put
+                outcome_condition = lambda expiry_price, strike: expiry_price < strike
+            else:
+                return {"error": "Invalid strategy selected"}
+                
+            options_df = options_df.dropna(subset=['impliedVolatility', 'strike', 'bid'])
+            options_df = options_df[options_df['impliedVolatility'] > 0]
+            options_df = options_df[options_df['bid'] > 0]
             
-            if calls.empty:
-                continue
+            if options_df.empty: continue
             
-            calls['delta'] = calls.apply(lambda row: calculate_delta(row, stock_price, days_expiry), axis=1)
-            calls = calls.dropna(subset=['delta'])
+            options_df['delta'] = options_df.apply(lambda row: calculate_greek(row, stock_price, days_expiry, 'delta', option_flag), axis=1)
+            options_df = options_df.dropna(subset=['delta'])
             
-            if calls.empty:
-                continue
+            if options_df.empty: continue
 
-            target_option = calls.iloc[(calls['delta'] - target_delta).abs().argsort()[:1]]
+            # For puts, delta is negative, so find the closest absolute value
+            target_option = options_df.iloc[(options_df['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
 
             if not target_option.empty:
                 strike_price = target_option['strike'].iloc[0]
@@ -89,21 +102,23 @@ def run_backtest(ticker: str, min_exp: int, max_exp: int, target_delta: float, r
                 trade_profit = premium * 100
                 outcome = "Expired OTM"
                 
-                if expiry_price > strike_price:
-                    stock_profit = (strike_price - stock_price) * 100
-                    trade_profit += stock_profit
+                # Check outcome condition
+                if outcome_condition(expiry_price, strike_price):
+                    if strategy == 'covered_call':
+                        stock_profit = (strike_price - stock_price) * 100
+                        trade_profit += stock_profit
+                    elif strategy == 'cash_secured_put':
+                        stock_loss = (expiry_price - strike_price) * 100
+                        trade_profit += stock_loss
                     outcome = "Expired ITM"
             
                 total_profit += trade_profit
                 trade_count += 1
-                trade_log.append(f"Sold {suitable_exp} call with strike ${strike_price:.2f}. Profit: ${trade_profit:.2f}. Outcome: {outcome}")
+                trade_log.append(f"Sold {strategy} on {suitable_exp} with strike ${strike_price:.2f}. Profit: ${trade_profit:.2f}. Outcome: {outcome}")
 
         return {
-            "ticker": ticker,
-            "trade_count": trade_count,
-            "total_profit": round(total_profit, 2),
-            "trade_log": trade_log,
-            "parameters": f"min_exp={min_exp}, max_exp={max_exp}, delta={target_delta}, risk_free={risk_free}"
+            "ticker": ticker, "trade_count": trade_count, "total_profit": round(total_profit, 2), "trade_log": trade_log,
+            "parameters": f"strategy={strategy}, min_exp={min_exp}, max_exp={max_exp}, delta={target_delta}"
         }
 
     except Exception as e:
@@ -111,14 +126,15 @@ def run_backtest(ticker: str, min_exp: int, max_exp: int, target_delta: float, r
 
 @app.route('/backtest', methods=['GET'])
 def backtest_endpoint():
-    #API endpoint to handle backtest requests from the frontend.
+    """API endpoint now also accepts a 'strategy' parameter."""
     ticker = request.args.get('ticker', default='MSFT', type=str)
+    strategy = request.args.get('strategy', default='covered_call', type=str)
     min_exp = request.args.get('min_exp', default=30, type=int)
     max_exp = request.args.get('max_exp', default=90, type=int)
     delta = request.args.get('delta', default=0.3, type=float)
     risk_free = request.args.get('risk_free', default=0.05, type=float)
 
-    results = run_backtest(ticker, min_exp, max_exp, delta, risk_free)
+    results = run_backtest(ticker, strategy, min_exp, max_exp, delta, risk_free)
     return jsonify(results)
 
 if __name__ == '__main__':

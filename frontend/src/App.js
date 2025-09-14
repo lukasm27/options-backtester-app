@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import './App.css';
 
 function App() {
+  // State for strategy parameters, including the new strategy selector
+  const [strategy, setStrategy] = useState('covered_call');
   const [ticker, setTicker] = useState('AAPL');
   const [minExp, setMinExp] = useState(30);
   const [maxExp, setMaxExp] = useState(90);
@@ -16,6 +18,7 @@ function App() {
     setResults(null);
 
     const params = new URLSearchParams({
+      strategy,
       ticker,
       min_exp: minExp,
       max_exp: maxExp,
@@ -42,6 +45,15 @@ function App() {
       <header className="App-header">
         <h1>Options Strategy Backtester</h1>
         <form onSubmit={handleBacktest} className="input-form">
+          {/* New Dropdown for Strategy */}
+          <div className="form-row">
+            <label>Strategy</label>
+            <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
+              <option value="covered_call">Covered Call</option>
+              <option value="cash_secured_put">Cash-Secured Put</option>
+            </select>
+          </div>
+
           <div className="form-row">
             <label>Ticker</label>
             <input
