@@ -34,7 +34,7 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
         start_date = end_date - timedelta(days=TIME_PERIOD_YEARS * 365)
         stock_history = ticker_obj.history(start=start_date, end=end_date, interval="1d")
         stock_history.index = stock_history.index.tz_localize(None)
-        trade_days = stock_history.resample('MS').first().index
+        trade_days = stock_history.resample('W-MON').first().index
 
         total_profit = 0
         trade_count = 0
