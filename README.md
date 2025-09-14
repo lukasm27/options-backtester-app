@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a full-stack web application that allows users to backtest a covered call options strategy for a given stock ticker. The application uses a Python Flask backend to fetch financial data and run the simulation, and a React frontend to provide a user-friendly interface.
+This is a full-stack web application that allows users to backtest options strategies for a given stock. The application uses a Python Flask backend to fetch financial data and run the simulation, and a React frontend to provide a user-friendly interface.
 
 
 
