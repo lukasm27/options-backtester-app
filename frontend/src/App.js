@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import './App.css';
+import { Bar } from 'react-chartjs-2';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 function App() {
-  // State for strategy parameters, including the new strategy selector
   const [strategy, setStrategy] = useState('covered_call');
   const [ticker, setTicker] = useState('AAPL');
   const [minExp, setMinExp] = useState(30);
@@ -40,12 +43,30 @@ function App() {
       });
   };
 
+  const chartData = {
+    labels: results?.chart_data?.labels || [],
+    datasets: [
+      {
+        label: 'Profit per Trade ($)',
+        data: results?.chart_data?.data || [],
+        backgroundColor: results?.chart_data?.data.map(profit => profit >= 0 ? 'rgba(75, 192, 192, 0.6)' : 'rgba(255, 99, 132, 0.6)'),
+      },
+    ],
+  };
+
+  const chartOptions = {
+    responsive: true,
+    plugins: {
+      legend: { position: 'top' },
+      title: { display: true, text: 'Weekly Trade Profit/Loss' },
+    },
+  };
+  
   return (
     <div className="App">
       <header className="App-header">
         <h1>Options Strategy Backtester</h1>
         <form onSubmit={handleBacktest} className="input-form">
-          {/* New Dropdown for Strategy */}
           <div className="form-row">
             <label>Strategy</label>
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
@@ -53,7 +74,6 @@ function App() {
               <option value="cash_secured_put">Cash-Secured Put</option>
             </select>
           </div>
-
           <div className="form-row">
             <label>Ticker</label>
             <input
@@ -99,6 +119,10 @@ function App() {
             ) : (
               <>
                 <h2>Backtest Results for {results.ticker}</h2>
+                <div className="chart-wrapper">
+                  <Bar options={chartOptions} data={chartData} />
+                </div>
+                
                 <p><strong>Parameters:</strong> {results.parameters}</p>
                 <p><strong>Total Profit:</strong> ${results.total_profit}</p>
                 <p><strong>Trades Executed:</strong> {results.trade_count}</p>

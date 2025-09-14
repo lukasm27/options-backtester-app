@@ -9,13 +9,10 @@ app = Flask(__name__)
 CORS(app)
 
 def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_delta: float, risk_free: float) -> dict:
-    """Runs a backtest for a given ticker and strategy."""
-    TIME_PERIOD_YEARS = 0.25
-    # For puts, delta is negative, so use the absolute value for the target
+    TIME_PERIOD_YEARS = 2
     TARGET_DELTA = abs(target_delta) if strategy == 'cash_secured_put' else target_delta
 
     def calculate_greek(row, stock_price, days_expiry, greek='delta', flag='c'):
-        #Helper function to calculate option greeks using Black-Scholes.
         try:
             S = stock_price
             K = row['strike']
@@ -24,7 +21,6 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
             sigma = row['impliedVolatility']
             if greek == 'delta':
                 return greeks.delta(flag, S, K, t, r, sigma)
-            # Can add other greeks like gamma or theta here later
         except Exception:
             return None
 
@@ -34,15 +30,19 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
         start_date = end_date - timedelta(days=TIME_PERIOD_YEARS * 365)
         stock_history = ticker_obj.history(start=start_date, end=end_date, interval="1d")
         stock_history.index = stock_history.index.tz_localize(None)
+        
         trade_days = stock_history.resample('W-MON').first().index
 
         total_profit = 0
         trade_count = 0
         trade_log = []
+        chart_labels = []
+        chart_data = []
         
         expirations = ticker_obj.options
         
         for trade_date in trade_days:
+            log_date = trade_date.strftime('%Y-%m-%d')
             if trade_date not in stock_history.index:
                 continue
 
@@ -60,19 +60,10 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
             if not suitable_exp:
                 continue
 
-            # STRATEGY LOGIC
             option_chain = ticker_obj.option_chain(suitable_exp)
-            if strategy == 'covered_call':
-                options_df = option_chain.calls
-                option_flag = 'c' #call
-                outcome_condition = lambda expiry_price, strike: expiry_price > strike
-            elif strategy == 'cash_secured_put':
-                options_df = option_chain.puts
-                option_flag = 'p' #put
-                outcome_condition = lambda expiry_price, strike: expiry_price < strike
-            else:
-                return {"error": "Invalid strategy selected"}
-                
+            options_df = option_chain.calls if strategy == 'covered_call' else option_chain.puts
+            option_flag = 'c' if strategy == 'covered_call' else 'p'
+            
             options_df = options_df.dropna(subset=['impliedVolatility', 'strike', 'bid'])
             options_df = options_df[options_df['impliedVolatility'] > 0]
             options_df = options_df[options_df['bid'] > 0]
@@ -84,7 +75,6 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
             
             if options_df.empty: continue
 
-            # For puts, delta is negative, so find the closest absolute value
             target_option = options_df.iloc[(options_df['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
 
             if not target_option.empty:
@@ -102,23 +92,26 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
                 trade_profit = premium * 100
                 outcome = "Expired OTM"
                 
-                # Check outcome condition
-                if outcome_condition(expiry_price, strike_price):
+                if (strategy == 'covered_call' and expiry_price > strike_price) or \
+                   (strategy == 'cash_secured_put' and expiry_price < strike_price):
+                    outcome = "Expired ITM"
                     if strategy == 'covered_call':
                         stock_profit = (strike_price - stock_price) * 100
                         trade_profit += stock_profit
                     elif strategy == 'cash_secured_put':
-                        stock_loss = (expiry_price - strike_price) * 100
-                        trade_profit += stock_loss
-                    outcome = "Expired ITM"
+                        stock_loss = (strike_price - expiry_price) * 100
+                        trade_profit = (premium * 100) - stock_loss
             
                 total_profit += trade_profit
                 trade_count += 1
-                trade_log.append(f"Sold {strategy} on {suitable_exp} with strike ${strike_price:.2f}. Profit: ${trade_profit:.2f}. Outcome: {outcome}")
-
+                trade_log.append(f"[{log_date}] Trade: Sold {strategy} on {suitable_exp} for ${premium:.2f} premium. Final Profit: ${trade_profit:.2f}. Outcome: {outcome}")
+                chart_labels.append(log_date)
+                chart_data.append(round(trade_profit, 2))
+        
         return {
             "ticker": ticker, "trade_count": trade_count, "total_profit": round(total_profit, 2), "trade_log": trade_log,
-            "parameters": f"strategy={strategy}, min_exp={min_exp}, max_exp={max_exp}, delta={target_delta}"
+            "parameters": f"strategy={strategy}, min_exp={min_exp}, max_exp={max_exp}, delta={target_delta}",
+            "chart_data": {"labels": chart_labels, "data": chart_data}
         }
 
     except Exception as e:
@@ -126,14 +119,12 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
 
 @app.route('/backtest', methods=['GET'])
 def backtest_endpoint():
-    """API endpoint now also accepts a 'strategy' parameter."""
     ticker = request.args.get('ticker', default='MSFT', type=str)
     strategy = request.args.get('strategy', default='covered_call', type=str)
     min_exp = request.args.get('min_exp', default=30, type=int)
     max_exp = request.args.get('max_exp', default=90, type=int)
     delta = request.args.get('delta', default=0.3, type=float)
     risk_free = request.args.get('risk_free', default=0.05, type=float)
-
     results = run_backtest(ticker, strategy, min_exp, max_exp, delta, risk_free)
     return jsonify(results)
 
