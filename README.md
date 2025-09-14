@@ -31,13 +31,13 @@ This is a full-stack web application that allows users to backtest a covered cal
     pip install -r requirements.txt 
 4.  Run the server:
     flask run
-The backend will be running at `http://127.0.0.1:5000`.
+The backend will be running at http://127.0.0.1:5000.
 
 ### Frontend (React)
-1.  Navigate to the `frontend` directory:
+1.  Navigate to the frontend directory:
     cd frontend
 2.  Install dependencies:
     npm install
 3.  Run the application:
     npm start
-The frontend will be available at `http://localhost:3000`.
+The frontend will be available at http://localhost:3000.
