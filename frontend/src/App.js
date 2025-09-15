@@ -11,6 +11,7 @@ function App() {
   const [minExp, setMinExp] = useState(30);
   const [maxExp, setMaxExp] = useState(90);
   const [delta, setDelta] = useState(0.3);
+  const [width, setWidth] = useState(5);
   
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -25,7 +26,8 @@ function App() {
       ticker,
       min_exp: minExp,
       max_exp: maxExp,
-      delta
+      delta,
+      width
     });
     
     const url = `http://127.0.0.1:5000/backtest?${params.toString()}`;
@@ -72,6 +74,7 @@ function App() {
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)}>
               <option value="covered_call">Covered Call</option>
               <option value="cash_secured_put">Cash-Secured Put</option>
+              <option value="iron_condor">Iron Condor</option>
             </select>
           </div>
           <div className="form-row">
@@ -107,6 +110,15 @@ function App() {
               onChange={(e) => setDelta(Number(e.target.value))}
             />
           </div>
+          {strategy=='iron_condor'&&(
+            <div className="form-row">
+              <label>Wing Width ($)</label>
+              <input
+                type="number"
+                value={width}
+                onChange={(e) => setWidth(Number(e.target.value))}/>
+            </div>
+          )}
           <button type="submit" disabled={loading}>
             {loading ? 'Running...' : 'Run Backtest'}
           </button>

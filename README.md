@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a full-stack web application that allows users to backtest options strategies for a given stock. The application uses a Python Flask backend to fetch financial data and run the simulation, and a React frontend to provide a user-friendly interface.
+This is a full-stack web application that allows users to backtest options strategies for a given stock. The application uses a Python Flask backend to fetch financial data and run the simulation, and a React frontend to provide a user-friendly interface. This backtester is a simulation and not a perfect historical replay. Due to the limitations of the free version of yfinance, the application uses current options chain data and applies it to historical stock prices. The results are therefore a valuable simulation of a strategy's mechanics but are not historically accurate. Due to this reliance on current options data, the backtest can only produce valid trades for the most recent three months. When the simulation looks at older historical dates, it cannot find a suitable future expiration date from today's list of available options.
 
 
 

@@ -8,9 +8,9 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_delta: float, risk_free: float) -> dict:
+def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_delta: float, risk_free: float, width: int) -> dict:
     TIME_PERIOD_YEARS = 2
-    TARGET_DELTA = abs(target_delta) if strategy == 'cash_secured_put' else target_delta
+    TARGET_DELTA = abs(target_delta)
 
     def calculate_greek(row, stock_price, days_expiry, greek='delta', flag='c'):
         try:
@@ -61,25 +61,41 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
                 continue
 
             option_chain = ticker_obj.option_chain(suitable_exp)
-            options_df = option_chain.calls if strategy == 'covered_call' else option_chain.puts
-            option_flag = 'c' if strategy == 'covered_call' else 'p'
             
-            options_df = options_df.dropna(subset=['impliedVolatility', 'strike', 'bid'])
-            options_df = options_df[options_df['impliedVolatility'] > 0]
-            options_df = options_df[options_df['bid'] > 0]
-            
-            if options_df.empty: continue
-            
-            options_df['delta'] = options_df.apply(lambda row: calculate_greek(row, stock_price, days_expiry, 'delta', option_flag), axis=1)
-            options_df = options_df.dropna(subset=['delta'])
-            
-            if options_df.empty: continue
+            if strategy == 'iron_condor':
+                puts = option_chain.puts.dropna(subset=['impliedVolatility', 'strike', 'bid', 'ask']).copy()
+                calls = option_chain.calls.dropna(subset=['impliedVolatility', 'strike', 'bid', 'ask']).copy()
+                
+                puts.loc[:, 'delta'] = puts.apply(lambda row: calculate_greek(row, stock_price, days_expiry, 'delta', 'p'), axis=1)
+                calls.loc[:, 'delta'] = calls.apply(lambda row: calculate_greek(row, stock_price, days_expiry, 'delta', 'c'), axis=1)
+                puts = puts.dropna(subset=['delta'])
+                calls = calls.dropna(subset=['delta'])
 
-            target_option = options_df.iloc[(options_df['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
+                if puts.empty or calls.empty: continue
 
-            if not target_option.empty:
-                strike_price = target_option['strike'].iloc[0]
-                premium = target_option['bid'].iloc[0]
+                short_put_leg = puts.iloc[(puts['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
+                short_call_leg = calls.iloc[(calls['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
+
+                if short_put_leg.empty or short_call_leg.empty: continue
+
+                short_put_strike = short_put_leg['strike'].iloc[0]
+                short_call_strike = short_call_leg['strike'].iloc[0]
+
+                target_long_put_strike = short_put_strike - width
+                target_long_call_strike = short_call_strike + width
+                long_put_leg = puts.iloc[(puts['strike'] - target_long_put_strike).abs().argsort()[:1]]
+                long_call_leg = calls.iloc[(calls['strike'] - target_long_call_strike).abs().argsort()[:1]]
+
+                if long_put_leg.empty or long_call_leg.empty: continue
+
+                premium = (short_put_leg['bid'].iloc[0] + short_call_leg['bid'].iloc[0]) - \
+                          (long_put_leg['ask'].iloc[0] + long_call_leg['ask'].iloc[0])
+                
+                if premium <= 0: continue
+
+                trade_profit = premium * 100
+                actual_width = long_call_leg['strike'].iloc[0] - short_call_leg['strike'].iloc[0]
+                max_loss = (actual_width * 100) - trade_profit
                 
                 try:
                     exp_datetime = datetime.strptime(suitable_exp, '%Y-%m-%d')
@@ -88,25 +104,57 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
                     expiry_price = expiry_row['Close']
                 except KeyError:
                     continue
-
-                trade_profit = premium * 100
-                outcome = "Expired OTM"
                 
-                if (strategy == 'covered_call' and expiry_price > strike_price) or \
-                   (strategy == 'cash_secured_put' and expiry_price < strike_price):
-                    outcome = "Expired ITM"
-                    if strategy == 'covered_call':
-                        stock_profit = (strike_price - stock_price) * 100
-                        trade_profit += stock_profit
-                    elif strategy == 'cash_secured_put':
-                        stock_loss = (strike_price - expiry_price) * 100
-                        trade_profit = (premium * 100) - stock_loss
-            
+                outcome = "Expired OTM (Max Profit)"
+                if not (short_put_strike < expiry_price < short_call_strike):
+                    outcome = "Expired ITM (Max Loss)"
+                    trade_profit = -max_loss
+                
+                # --- FIX: This block was in the wrong place ---
                 total_profit += trade_profit
                 trade_count += 1
-                trade_log.append(f"[{log_date}] Trade: Sold {strategy} on {suitable_exp} for ${premium:.2f} premium. Final Profit: ${trade_profit:.2f}. Outcome: {outcome}")
+                trade_log.append(f"[{log_date}] Trade: Sold Iron Condor on {suitable_exp} for ${premium*100:.2f} credit. Final Profit: ${trade_profit:.2f}. Outcome: {outcome}")
                 chart_labels.append(log_date)
                 chart_data.append(round(trade_profit, 2))
+
+            elif strategy in ['covered_call', 'cash_secured_put']:
+                # (Your existing logic for CC and CSP is correct and remains here)
+                options_df = option_chain.calls if strategy == 'covered_call' else option_chain.puts
+                option_flag = 'c' if strategy == 'covered_call' else 'p'
+                options_df = options_df.dropna(subset=['impliedVolatility', 'strike', 'bid'])
+                options_df = options_df[options_df['impliedVolatility'] > 0]
+                options_df = options_df[options_df['bid'] > 0]
+                if options_df.empty: continue
+                options_df['delta'] = options_df.apply(lambda row: calculate_greek(row, stock_price, days_expiry, 'delta', option_flag), axis=1)
+                options_df = options_df.dropna(subset=['delta'])
+                if options_df.empty: continue
+                target_option = options_df.iloc[(options_df['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
+                if not target_option.empty:
+                    strike_price = target_option['strike'].iloc[0]
+                    premium = target_option['bid'].iloc[0]
+                    try:
+                        exp_datetime = datetime.strptime(suitable_exp, '%Y-%m-%d')
+                        expiry_index = stock_history.index.get_indexer([exp_datetime], method='nearest')[0]
+                        expiry_row = stock_history.iloc[expiry_index]
+                        expiry_price = expiry_row['Close']
+                    except KeyError:
+                        continue
+                    trade_profit = premium * 100
+                    outcome = "Expired OTM"
+                    if (strategy == 'covered_call' and expiry_price > strike_price) or \
+                       (strategy == 'cash_secured_put' and expiry_price < strike_price):
+                        outcome = "Expired ITM"
+                        if strategy == 'covered_call':
+                            stock_profit = (strike_price - stock_price) * 100
+                            trade_profit += stock_profit
+                        elif strategy == 'cash_secured_put':
+                            stock_loss = (strike_price - expiry_price) * 100
+                            trade_profit = (premium * 100) - stock_loss
+                    total_profit += trade_profit
+                    trade_count += 1
+                    trade_log.append(f"[{log_date}] Trade: Sold {strategy} on {suitable_exp} for ${premium:.2f} premium. Final Profit: ${trade_profit:.2f}. Outcome: {outcome}")
+                    chart_labels.append(log_date)
+                    chart_data.append(round(trade_profit, 2))
         
         return {
             "ticker": ticker, "trade_count": trade_count, "total_profit": round(total_profit, 2), "trade_log": trade_log,
@@ -117,6 +165,7 @@ def run_backtest(ticker: str, strategy: str, min_exp: int, max_exp: int, target_
     except Exception as e:
         return {"error": str(e)}
 
+
 @app.route('/backtest', methods=['GET'])
 def backtest_endpoint():
     ticker = request.args.get('ticker', default='MSFT', type=str)
@@ -125,7 +174,8 @@ def backtest_endpoint():
     max_exp = request.args.get('max_exp', default=90, type=int)
     delta = request.args.get('delta', default=0.3, type=float)
     risk_free = request.args.get('risk_free', default=0.05, type=float)
-    results = run_backtest(ticker, strategy, min_exp, max_exp, delta, risk_free)
+    width = request.args.get('width', default=5, type=int)
+    results = run_backtest(ticker, strategy, min_exp, max_exp, delta, risk_free, width)
     return jsonify(results)
 
 if __name__ == '__main__':
