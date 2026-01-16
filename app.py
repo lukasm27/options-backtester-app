@@ -1,5 +1,3 @@
-# Flask backend for the Options Strategy Backtester.
-# This serves a REST API that runs the simulation and returns results.
 
 import yfinance as yf
 import pandas as pd
@@ -12,12 +10,10 @@ app = Flask(__name__)
 CORS(app)
 
 def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, target_delta: float, risk_free: float, width: int) -> dict:
-    #The core simulation engine for the backtester.
-    TIME_PERIOD_YEARS = 2
+    yrs = 2
     TARGET_DELTA = abs(target_delta)
 
     def calculate_greek(row, stock_price, days_to_exp, flag='c'):
-        #Helper to calculate option delta via Black-Scholes.
         try:
             S = stock_price
             K = row['strike']
@@ -29,11 +25,11 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
             return None
 
     try:
-        yf_ticker = yf.Ticker(ticker_symbol)
+        tick = yf.Ticker(ticker_symbol)
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=TIME_PERIOD_YEARS * 365)
+        start_date = end_date - timedelta(days=yrs * 365)
 
-        hist = yf_ticker.history(start=start_date, end=end_date, interval="1d")
+        hist = tick.history(start=start_date, end=end_date, interval="1d")
         hist.index = hist.index.tz_localize(None)
         
         trade_days = hist.resample('W-MON').first().index
@@ -44,7 +40,7 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
         chart_labels = []
         chart_data = []
         
-        expirations = yf_ticker.options
+        expirations = tick.options
         
         for trade_date in trade_days:
             log_date = trade_date.strftime('%Y-%m-%d')
@@ -53,7 +49,6 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
 
             stock_price = hist.loc[trade_date]['Close']
 
-            # Find the first suitable expiration date in our window
             target_exp_str = None
             days_to_exp = 0
             for exp_str in expirations:
@@ -67,7 +62,7 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
             if not target_exp_str:
                 continue
 
-            option_chain = yf_ticker.option_chain(target_exp_str)
+            option_chain = tick.option_chain(target_exp_str)
             
             if strategy == 'iron_condor':
                 puts = option_chain.puts.dropna(subset=['impliedVolatility', 'strike', 'bid', 'ask']).copy()
@@ -170,7 +165,6 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
 
 @app.route('/backtest', methods=['GET'])
 def backtest_endpoint():
-    #API endpoint to handle backtest requests.
     ticker = request.args.get('ticker', default='MSFT', type=str)
     strategy = request.args.get('strategy', default='covered_call', type=str)
     min_exp = request.args.get('min_exp', default=30, type=int)
