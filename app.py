@@ -1,7 +1,7 @@
 
 import yfinance as yf
 #free version of yfinance doesn't provide historical options chains, 
-#therefore this backtester pulls today's options chain for upcoming tick.options
+#therefore this backtester pulls today's options chain for upcoming tick options
 import pandas as pd
 from datetime import datetime, timedelta
 from py_vollib.black_scholes.greeks import analytical as greeks
@@ -46,7 +46,7 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
         
     for trade_date in trade_days:
         log_date = trade_date.strftime('%Y-%m-%d')
-        stock_price = hist.loc[trade_date]['Close']
+        stock_price = hist.loc[trade_date]['Close'] #lookup by label (date)
 
         target_exp_str = None
         days_to_exp = 0
@@ -63,15 +63,18 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
             
         if strategy == 'iron_condor':
             puts = tick.option_chain(target_exp_str).puts.dropna(subset=['impliedVolatility', 'strike', 'bid', 'ask'])
+            #dropna returns new object by default(shallow copy)
             calls = tick.option_chain(target_exp_str).calls.dropna(subset=['impliedVolatility', 'strike', 'bid', 'ask'])
-                
+
+            #vectorisation rather than for loops for speed  
+            #lambda functions used map get_delta function across dataframe rows 
             puts.loc[:, 'delta'] = puts.apply(lambda row: calculate_greek(row, stock_price, days_to_exp, 'p'), axis=1)
             calls.loc[:, 'delta'] = calls.apply(lambda row: calculate_greek(row, stock_price, days_to_exp, 'c'), axis=1)
             puts, calls = puts.dropna(subset=['delta']), calls.dropna(subset=['delta'])
 
             if puts.empty or calls.empty: continue
             #finds strike closest to target delta
-            short_put = puts.iloc[(puts['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
+            short_put = puts.iloc[(puts['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]] #lookup by integer(first row)
             short_call = calls.iloc[(calls['delta'].abs() - TARGET_DELTA).abs().argsort()[:1]]
 
             if short_put.empty or short_call.empty: continue
@@ -157,7 +160,7 @@ def run_backtest(ticker_symbol: str, strategy: str, min_exp: int, max_exp: int, 
         "chart_data": {"labels": chart_labels, "data": chart_data}
     }
 
-@app.route('/backtest', methods=['GET'])
+@app.route('/backtest', methods=['GET']) #decorator - when a specific URL is entered, backtest_endpoint executes
 def backtest_endpoint():
     ticker = request.args.get('ticker', default='MSFT', type=str)
     strategy = request.args.get('strategy', default='covered_call', type=str)
